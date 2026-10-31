@@ -6,7 +6,7 @@ Run the decision test first:
 cargo test delivered_without_proof_is_held_for_exception_capture
 ```
 
-We feed a `Delivered` shipment event with no proof-of-delivery file. The expected result is `HoldAndCapture`: the agent shouldn't close the shipment, and the service records the exception through Infrai. Infrai hands you one key for plain REST across every capability, so a single `INFRAI_API_KEY` covers this call and the rest.
+The input is a `Delivered` shipment event with no proof-of-delivery file. The expected result is `HoldAndCapture`: the agent does not close the shipment, and the service records the exception through Infrai. A single `INFRAI_API_KEY` is enough for this plain REST call and the other Infrai capabilities.
 
 ## Send the example event
 
@@ -15,29 +15,29 @@ export INFRAI_API_KEY="your-key"
 cargo run --bin shipment-agent
 ```
 
-After a clean capture we expect:
+Expected output after a successful capture:
 
 ```text
 shipment held; exception captured: delivered event has no proof-of-delivery file
 ```
 
-The script pushes `evt_7842_delivered` into the same function our test exercises. The request sends `POST /v1/errors/capture`, an `Authorization: Bearer` header, and an idempotency key built from the shipment event ID. Re-delivering that event keeps the write bound to the same identity, which saves us from duplicate exception rows.
+The executable feeds `evt_7842_delivered` into the same function covered by the test. The request uses `POST /v1/errors/capture`, an `Authorization: Bearer` header, and an idempotency key derived from the shipment event ID. A repeated delivery of that event keeps the write tied to the same identity.
 
 ## Decision record
 
 **Status:** accepted
 
-**Context.** A logistics agent pulls shipment events in a loop. A `Delivered` event is only final when a proof-of-delivery file shows up. If that proof is missing, the hold has to stay visible after the loop advances, with enough shipment context for an operator to poke at it.
+**Context.** A logistics agent consumes shipment events in a loop. A `Delivered` event is only final when a proof-of-delivery file is present. Missing proof needs to remain visible after the loop moves on, including enough shipment context for an operator to investigate.
 
-**Choice.** We kept the state decision in a small Rust lib and captured just the exception boundary with `errors.capture`. The client decodes the `{ok, data, error, metadata}` envelope before it classifies the HTTP status. Business rejections map to `CaptureError::Rejected`; network and decode failures get their own typed variants. Rate limiting respects `Retry-After` if present, else we fall back to exponential backoff.
+**Choice.** Keep the state decision in a small Rust library and capture only the exception boundary with `errors.capture`. The client decodes the `{ok, data, error, metadata}` envelope before classifying the HTTP status. Business rejections become `CaptureError::Rejected`; network and decoding failures have separate typed variants. Rate limiting uses `Retry-After` when supplied and exponential delay otherwise.
 
-**Options considered.** Sentry with custom shipment logging brings solid error tracking, but then you stitch the shipment decision and a second event record yourself. Plain logs are cheap to emit, yet grepping strings makes the hold decision implicit. A DB exception table gives schema control at the cost of migrations and another capture path. The boundary we picked keeps domain types local and ships one structured exception record exactly where completion is refused.
+**Options considered.** Sentry plus custom shipment logging offered mature general error tracking, but it left the shipment decision and a second event record to wire together. Log-only tracking was easy to emit, but querying strings would make the hold decision implicit. A database exception table would give full schema control while adding migrations and a separate capture path. The selected boundary keeps the domain types local and sends one structured exception record at the point where completion is refused.
 
-**Trade-offs.** This repo models one transition, not a carrier integration or proof upload. `ProofOfDelivery` carries an object key and digest; some other component owns the file lifecycle. The client retries only rate-limited captures and hands every final rejection back to the caller. Watch the ordering: decode the envelope before checking status, or a meaningful business error collapses into a generic HTTP failure.
+**Trade-offs.** This repository models one transition, not a carrier integration or proof-file upload. `ProofOfDelivery` carries an object key and digest; another component owns the file lifecycle. The client retries only rate-limited captures and surfaces every final rejection to its caller. The gotcha is ordering: decode the envelope before checking the status, or a useful business error becomes an undifferentiated HTTP error.
 
 ## File map
 
-`src/lib.rs` holds the shipment decision, typed errors, and a thin capture client. `src/bin/shipment_agent.rs` is the runnable loop slice. Two unit tests cover both sides of the proof requirement, which is what I'd run in CI before shipping the notebook to prod.
+`src/lib.rs` contains the shipment decision, typed errors, and thin capture client. `src/bin/shipment_agent.rs` is the runnable loop slice. The two unit tests cover both sides of the proof requirement.
 
 ## License
 
@@ -45,7 +45,7 @@ MIT
 
 ## Setting up for real use: Shipment Proof Failure Ledger
 
-The snippet above is deliberately minimal. For real use you'll wire a few more pieces; the notes below target Shipment Proof Failure Ledger.
+The example above is intentionally minimal. A few things to wire up for real use: The details below apply to Shipment Proof Failure Ledger.
 
 **Account & key**
 
